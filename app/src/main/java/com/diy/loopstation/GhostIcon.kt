@@ -10,6 +10,8 @@ import androidx.compose.ui.graphics.Path
 /**
  * Simple flat ghost glyph: rounded head, scalloped bottom edge, two dot eyes.
  * Deliberately minimal - single-color silhouette, no shading, no gradients.
+ * Pass a taller-than-wide Modifier size (e.g. width 0.6-0.7x of height) for a
+ * classic elongated ghost look - the path itself scales to whatever box it's given.
  */
 @Composable
 fun GhostIcon(modifier: Modifier = Modifier, color: Color = AccentSignal) {
@@ -19,8 +21,8 @@ fun GhostIcon(modifier: Modifier = Modifier, color: Color = AccentSignal) {
         val segW = w / 4f
 
         val path = Path().apply {
-            moveTo(0f, h * 0.55f)
-            cubicTo(0f, h * 0.05f, w, h * 0.05f, w, h * 0.55f)
+            moveTo(0f, h * 0.45f)
+            cubicTo(0f, h * 0.02f, w, h * 0.02f, w, h * 0.45f)
             lineTo(w, h * 0.82f)
             quadraticBezierTo(w - segW * 0.5f, h, w - segW, h * 0.82f)
             quadraticBezierTo(w - segW * 1.5f, h, w - segW * 2f, h * 0.82f)
@@ -30,8 +32,8 @@ fun GhostIcon(modifier: Modifier = Modifier, color: Color = AccentSignal) {
         }
         drawPath(path, color = color)
 
-        val eyeR = w * 0.055f
-        drawCircle(color = BgBlack, radius = eyeR, center = Offset(w * 0.35f, h * 0.42f))
-        drawCircle(color = BgBlack, radius = eyeR, center = Offset(w * 0.65f, h * 0.42f))
+        val eyeR = w * 0.06f
+        drawCircle(color = BgBlack, radius = eyeR, center = Offset(w * 0.35f, h * 0.36f))
+        drawCircle(color = BgBlack, radius = eyeR, center = Offset(w * 0.65f, h * 0.36f))
     }
 }

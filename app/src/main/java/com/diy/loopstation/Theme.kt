@@ -1,10 +1,10 @@
 package com.diy.loopstation
 
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Shapes
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -19,28 +19,22 @@ val SpaceMono = FontFamily(
     Font(R.font.space_mono_bold, FontWeight.Bold)
 )
 
-// Palette: near-black ground, off-white text, one accent (signal orange/red)
+// Static palette
 val BgBlack = Color(0xFF0A0A0A)
 val SurfaceDark = Color(0xFF151515)
 val OutlineGrey = Color(0xFF2C2C2C)
 val TextPrimary = Color(0xFFECECEC)
 val TextSecondary = Color(0xFF848484)
-val AccentSignal = Color(0xFFFF3D1A) // TE/Nothing-style signal red-orange
-val AccentDim = Color(0xFF7A1E0F)
 val ConfirmGreen = Color(0xFF2CFF6B)
 
-val LooperColorScheme = darkColorScheme(
-    background = BgBlack,
-    surface = SurfaceDark,
-    primary = AccentSignal,
-    onPrimary = Color.Black,
-    secondary = ConfirmGreen,
-    onSecondary = Color.Black,
-    onBackground = TextPrimary,
-    onSurface = TextPrimary,
-    outline = OutlineGrey,
-    error = AccentSignal
-)
+// Dynamic accent - reads UiSettings.accentHue, so any Composable or Canvas draw
+// scope that references AccentSignal/AccentDim recomposes/redraws live when the
+// hue slider moves. No separate "apply" step needed.
+val AccentSignal: Color
+    get() = Color(android.graphics.Color.HSVToColor(floatArrayOf(UiSettings.accentHue, 0.82f, 1f)))
+
+val AccentDim: Color
+    get() = Color(android.graphics.Color.HSVToColor(floatArrayOf(UiSettings.accentHue, 0.82f, 0.32f)))
 
 val LooperShapes = Shapes(
     extraSmall = RoundedCornerShape(2.dp),
@@ -74,8 +68,23 @@ val LooperTypography = Typography(
 
 @Composable
 fun LooperTheme(content: @Composable () -> Unit) {
+    // Reading AccentSignal here (which reads UiSettings.accentHue) means this whole
+    // composable recomposes - and hands MaterialTheme a fresh colorScheme - the
+    // instant the hue slider moves.
+    val scheme = darkColorScheme(
+        background = BgBlack,
+        surface = SurfaceDark,
+        primary = AccentSignal,
+        onPrimary = Color.Black,
+        secondary = ConfirmGreen,
+        onSecondary = Color.Black,
+        onBackground = TextPrimary,
+        onSurface = TextPrimary,
+        outline = OutlineGrey,
+        error = AccentSignal
+    )
     MaterialTheme(
-        colorScheme = LooperColorScheme,
+        colorScheme = scheme,
         typography = LooperTypography,
         shapes = LooperShapes,
         content = content

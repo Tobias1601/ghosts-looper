@@ -37,6 +37,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        engine.metronome = metronome
 
         hasPermission = ContextCompat.checkSelfPermission(
             this, Manifest.permission.RECORD_AUDIO
@@ -83,11 +84,24 @@ fun LooperScreen(
     var tick by remember { mutableStateOf(0) }
     var bpm by remember { mutableStateOf(100f) }
     var metronomeOn by remember { mutableStateOf(false) }
+    var metronomeExpanded by remember { mutableStateOf(false) }
     var latencyMs by remember { mutableStateOf(0f) }
     var lowLatency by remember { mutableStateOf(true) }
     var settingsOpen by remember { mutableStateOf(false) }
     var trimTrack by remember { mutableStateOf<Track?>(null) }
+    var editTrack by remember { mutableStateOf<Track?>(null) }
+    var compactMode by remember { mutableStateOf(false) }
+    val multipliers = remember { mutableStateMapOf<Int, Float>() }
+
+    // Auto-latency-test state, hoisted here so it survives closing/reopening SETUP -
+    // it only resets when the user runs a new test.
     var calibratorOpen by remember { mutableStateOf(false) }
+    var calibPhase by remember { mutableStateOf(CalibPhase.IDLE) }
+    var calibBuffer by remember { mutableStateOf(ShortArray(0)) }
+    var calibClicks by remember { mutableStateOf(listOf<Int>()) }
+    var calibMarkerFrac by remember { mutableStateOf(0.5f) }
+
+    val busy = recordingTrackIndex != -1 || trimTrack != null || editTrack != null || calibratorOpen
 
     Column(
         modifier = Modifier
@@ -103,47 +117,49 @@ fun LooperScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                GhostIcon(modifier = Modifier.size(34.dp), color = AccentSignal)
+                GhostIcon(modifier = Modifier.width(22.dp).height(32.dp), color = AccentSignal)
                 Spacer(Modifier.width(10.dp))
                 Column {
-                    Text("GHOSTS", style = MaterialTheme.typography.headlineMedium, color = TextPrimary)
-                    Text("LOOPER · DIY UNIT · 04 TRACK", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                    Text(Strings.t("app_title"), style = MaterialTheme.typography.headlineMedium, color = TextPrimary)
+                    Text(Strings.t("app_subtitle"), style = MaterialTheme.typography.bodySmall, color = TextSecondary)
                 }
             }
             OutlinedButton(
                 onClick = { settingsOpen = !settingsOpen },
                 border = BorderStroke(1.dp, if (settingsOpen) AccentSignal else OutlineGrey),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = if (settingsOpen) AccentSignal else TextSecondary)
-            ) { Text("SETUP", style = MaterialTheme.typography.labelLarge) }
+            ) { Text(Strings.t("setup"), style = MaterialTheme.typography.labelLarge) }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            LangButton(Strings.t("compact"), compactMode) { compactMode = !compactMode }
         }
 
         Spacer(Modifier.height(14.dp))
 
         if (!hasPermission) {
             SectionCard {
-                Text("MIKROFON-ZUGRIFF ERFORDERLICH", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                Text(Strings.t("mic_permission_needed"), style = MaterialTheme.typography.titleMedium, color = TextPrimary)
                 Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = onRequestPermission,
                     colors = ButtonDefaults.buttonColors(containerColor = AccentSignal, contentColor = Color.Black)
-                ) { Text("ERLAUBEN", style = MaterialTheme.typography.labelLarge) }
+                ) { Text(Strings.t("allow"), style = MaterialTheme.typography.labelLarge) }
             }
             return@Column
         }
 
-        // --- Settings panel: latency + low latency mode ---
+        // --- Settings panel ---
         if (settingsOpen) {
             SectionCard(accent = true) {
-                Text("LATENZ-KALIBRIERUNG", style = MaterialTheme.typography.titleMedium, color = AccentSignal)
+                Text(Strings.t("latency_calibration"), style = MaterialTheme.typography.titleMedium, color = AccentSignal)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "OFFSET: ${if (latencyMs >= 0) "+" else ""}${latencyMs.toInt()} MS",
+                    "${Strings.t("offset")}: ${if (latencyMs >= 0) "+" else ""}${latencyMs.toInt()} MS",
                     style = MaterialTheme.typography.bodyMedium, color = TextPrimary
                 )
-                Text(
-                    "POSITIV = AUFNAHME WIRD FRÜHER GESCHNITTEN (SYSTEM-DELAY AUSGLEICHEN)",
-                    style = MaterialTheme.typography.bodySmall, color = TextSecondary
-                )
+                Text(Strings.t("offset_hint"), style = MaterialTheme.typography.bodySmall, color = TextSecondary)
                 Slider(
                     value = latencyMs,
                     onValueChange = { latencyMs = it; AudioSettings.latencyMs = it.toInt() },
@@ -157,7 +173,7 @@ fun LooperScreen(
                     modifier = Modifier.fillMaxWidth(),
                     border = BorderStroke(1.dp, AccentSignal),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentSignal)
-                ) { Text("AUTO-LATENZ-TEST (CLICK-TRACK)", style = MaterialTheme.typography.labelLarge) }
+                ) { Text(Strings.t("auto_latency_test"), style = MaterialTheme.typography.labelLarge) }
 
                 Spacer(Modifier.height(10.dp))
                 Row(
@@ -166,14 +182,36 @@ fun LooperScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("LOW-LATENCY-MODUS", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
-                        Text("VOICE_COMM INPUT + FAST-TRACK OUTPUT", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                        Text(Strings.t("low_latency_mode"), style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                        Text(Strings.t("low_latency_desc"), style = MaterialTheme.typography.bodySmall, color = TextSecondary)
                     }
                     Switch(
                         checked = lowLatency,
                         onCheckedChange = { lowLatency = it; AudioSettings.lowLatencyMode = it },
                         colors = SwitchDefaults.colors(checkedTrackColor = AccentSignal)
                     )
+                }
+
+                Spacer(Modifier.height(14.dp))
+                HairlineDivider()
+                Spacer(Modifier.height(14.dp))
+
+                Text(Strings.t("appearance"), style = MaterialTheme.typography.titleMedium, color = AccentSignal)
+                Spacer(Modifier.height(6.dp))
+                Text(Strings.t("accent_color"), style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                Slider(
+                    value = UiSettings.accentHue,
+                    onValueChange = { UiSettings.accentHue = it },
+                    valueRange = 0f..360f,
+                    colors = SliderDefaults.colors(thumbColor = AccentSignal, activeTrackColor = AccentSignal)
+                )
+
+                Spacer(Modifier.height(10.dp))
+                Text(Strings.t("language"), style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                Spacer(Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LangButton("DE", UiSettings.lang == Lang.DE) { UiSettings.lang = Lang.DE }
+                    LangButton("EN", UiSettings.lang == Lang.EN) { UiSettings.lang = Lang.EN }
                 }
             }
             Spacer(Modifier.height(10.dp))
@@ -183,6 +221,14 @@ fun LooperScreen(
         if (calibratorOpen) {
             LatencyCalibrator(
                 engine = engine,
+                phase = calibPhase,
+                onPhaseChange = { calibPhase = it },
+                buffer = calibBuffer,
+                onBufferChange = { calibBuffer = it },
+                clickFrames = calibClicks,
+                onClickFramesChange = { calibClicks = it },
+                markerFrac = calibMarkerFrac,
+                onMarkerFracChange = { calibMarkerFrac = it },
                 onApply = { ms ->
                     latencyMs = ms.toFloat()
                     AudioSettings.latencyMs = ms
@@ -196,6 +242,7 @@ fun LooperScreen(
         // --- Trim editor overlay for the master-setting recording ---
         trimTrack?.let { t ->
             TrimEditor(
+                title = Strings.t("trim_title"),
                 buffer = t.buffer,
                 onConfirm = { s, e ->
                     engine.finalizeMasterTrim(t, s, e)
@@ -211,24 +258,46 @@ fun LooperScreen(
             Spacer(Modifier.height(10.dp))
         }
 
-        // --- Metronome ---
-        SectionCard {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("METRONOM · ${bpm.toInt()} BPM", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
-                Switch(
-                    checked = metronomeOn,
-                    onCheckedChange = {
-                        metronomeOn = it
-                        metronome.bpm = bpm.toInt()
-                        if (it) metronome.start() else metronome.stop()
-                    },
-                    colors = SwitchDefaults.colors(checkedTrackColor = AccentSignal)
-                )
-            }
+        // --- Re-edit overlay for an already-committed track (length preserved) ---
+        editTrack?.let { t ->
+            TrimEditor(
+                title = "${Strings.t("edit_title")} ${t.index + 1}",
+                buffer = t.buffer,
+                onConfirm = { s, e ->
+                    engine.reEditTrack(t, s, e)
+                    editTrack = null
+                    tick++
+                },
+                onCancel = { editTrack = null }
+            )
+            Spacer(Modifier.height(10.dp))
+        }
+
+        // --- Metronome: compact, tap BPM to expand ---
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable { metronomeExpanded = !metronomeExpanded }
+                .padding(vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "${Strings.t("metronome")} · ${bpm.toInt()} BPM",
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (metronomeOn) TextPrimary else TextSecondary
+            )
+            Switch(
+                checked = metronomeOn,
+                onCheckedChange = {
+                    metronomeOn = it
+                    metronome.bpm = bpm.toInt()
+                    if (it) metronome.start() else metronome.stop()
+                },
+                colors = SwitchDefaults.colors(checkedTrackColor = AccentSignal)
+            )
+        }
+        if (metronomeExpanded) {
             Slider(
                 value = bpm,
                 onValueChange = { bpm = it; metronome.bpm = it.toInt() },
@@ -236,35 +305,38 @@ fun LooperScreen(
                 colors = SliderDefaults.colors(thumbColor = AccentSignal, activeTrackColor = AccentSignal)
             )
         }
-
+        HairlineDivider()
         Spacer(Modifier.height(10.dp))
 
         Text(
             text = if (engine.isMasterSet())
-                "LOOP-LÄNGE: %.2fS".format(engine.masterLoopLengthFrames / SAMPLE_RATE.toFloat())
-            else "TRACK 1 AUFNEHMEN → LEGT LOOP-LÄNGE FEST",
+                "${Strings.t("loop_length")}: %.2fS".format(engine.masterLoopLengthFrames / SAMPLE_RATE.toFloat())
+            else Strings.t("loop_length_pending"),
             style = MaterialTheme.typography.bodySmall,
             color = TextSecondary
         )
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(if (compactMode) 4.dp else 10.dp))
 
         key(tick) {
             engine.tracks.forEach { track ->
                 TrackRow(
                     track = track,
                     isRecording = recordingTrackIndex == track.index,
-                    canRecord = recordingTrackIndex == -1 && trimTrack == null && !calibratorOpen,
+                    canAct = !busy || recordingTrackIndex == track.index,
+                    isMasterSet = engine.isMasterSet(),
+                    selectedMultiplier = multipliers[track.index] ?: 1f,
+                    onMultiplierChange = { multipliers[track.index] = it },
+                    compact = compactMode,
                     onRecordToggle = {
                         if (recordingTrackIndex == track.index) {
                             engine.stopRecording()
-                        } else if (recordingTrackIndex == -1 && trimTrack == null && !calibratorOpen) {
+                        } else if (!busy) {
                             recordingTrackIndex = track.index
-                            engine.startRecording(track) { isMasterCandidate ->
+                            val mult = multipliers[track.index] ?: 1f
+                            engine.startRecording(track, mult) { raw ->
                                 recordingTrackIndex = -1
-                                if (isMasterCandidate) {
-                                    trimTrack = track
-                                }
+                                if (raw != null) trimTrack = track
                                 tick++
                             }
                         }
@@ -273,41 +345,69 @@ fun LooperScreen(
                     onUndo = { engine.undo(track); tick++ },
                     onMuteToggle = { track.muted = !track.muted; track.updateVolume(); tick++ },
                     onVolumeChange = { v -> track.volume = v; track.updateVolume() },
+                    onEdit = { editTrack = track },
                     onExport = {
                         exportDir.mkdirs()
                         val f = File(exportDir, "track${track.index + 1}.wav")
                         engine.exportWav(track, f)
-                        Toast.makeText(context, "EXPORTIERT: ${f.absolutePath}", Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, "${Strings.t("exported")}: ${f.absolutePath}", Toast.LENGTH_LONG).show()
                     }
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(if (compactMode) 4.dp else 8.dp))
             }
         }
 
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(if (compactMode) 2.dp else 6.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(
                 onClick = { engine.playAll() },
                 border = BorderStroke(1.dp, OutlineGrey),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
-            ) { Text("▶ ALLE", style = MaterialTheme.typography.labelLarge) }
+            ) { Text(Strings.t("play_all"), style = MaterialTheme.typography.labelLarge) }
 
             OutlinedButton(
                 onClick = { engine.stopAll() },
                 border = BorderStroke(1.dp, OutlineGrey),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
-            ) { Text("■ ALLE", style = MaterialTheme.typography.labelLarge) }
+            ) { Text(Strings.t("stop_all"), style = MaterialTheme.typography.labelLarge) }
 
             OutlinedButton(
                 onClick = { engine.clearAll(); tick++ },
                 border = BorderStroke(1.dp, AccentDim),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentSignal)
-            ) { Text("RESET", style = MaterialTheme.typography.labelLarge) }
+            ) { Text(Strings.t("reset"), style = MaterialTheme.typography.labelLarge) }
         }
 
         Spacer(Modifier.height(24.dp))
     }
+}
+
+@Composable
+fun LangButton(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .background(if (selected) AccentSignal else Color.Transparent)
+            .border(BorderStroke(1.dp, if (selected) AccentSignal else OutlineGrey))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 6.dp)
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (selected) Color.Black else TextSecondary
+        )
+    }
+}
+
+@Composable
+fun HairlineDivider() {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(OutlineGrey)
+    )
 }
 
 @Composable
@@ -331,9 +431,44 @@ fun MuteToggle(active: Boolean, onClick: () -> Unit) {
             .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
         Text(
-            "MUTE",
+            Strings.t("mute"),
             style = MaterialTheme.typography.bodySmall,
             color = if (active) Color.Black else TextSecondary
+        )
+    }
+}
+
+@Composable
+fun MultiplierPicker(selected: Float, onSelect: (Float) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf(0.5f to "½×", 1f to "1×", 2f to "2×").forEach { (value, label) ->
+            val isSel = selected == value
+            Box(
+                Modifier
+                    .background(if (isSel) AccentSignal else Color.Transparent)
+                    .border(BorderStroke(1.dp, if (isSel) AccentSignal else OutlineGrey))
+                    .clickable { onSelect(value) }
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+                Text(label, style = MaterialTheme.typography.bodySmall, color = if (isSel) Color.Black else TextSecondary)
+            }
+        }
+    }
+}
+
+@Composable
+fun CompactIconButton(label: String, active: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .background(if (active) AccentSignal else Color.Transparent)
+            .border(BorderStroke(1.dp, if (active) AccentSignal else OutlineGrey))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 7.dp, vertical = 4.dp)
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (!enabled) OutlineGrey else if (active) Color.Black else TextSecondary
         )
     }
 }
@@ -342,15 +477,87 @@ fun MuteToggle(active: Boolean, onClick: () -> Unit) {
 fun TrackRow(
     track: Track,
     isRecording: Boolean,
-    canRecord: Boolean,
+    canAct: Boolean,
+    isMasterSet: Boolean,
+    selectedMultiplier: Float,
+    onMultiplierChange: (Float) -> Unit,
     onRecordToggle: () -> Unit,
     onClear: () -> Unit,
     onUndo: () -> Unit,
     onMuteToggle: () -> Unit,
     onVolumeChange: (Float) -> Unit,
-    onExport: () -> Unit
+    onEdit: () -> Unit,
+    onExport: () -> Unit,
+    compact: Boolean = false
 ) {
     var volumeSlider by remember(track.index) { mutableStateOf(track.volume) }
+
+    if (compact) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(SurfaceDark)
+                .border(BorderStroke(1.dp, if (isRecording) AccentSignal else OutlineGrey))
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "${track.index + 1}",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (track.isEmpty) TextSecondary else TextPrimary,
+                    modifier = Modifier.width(16.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Button(
+                    onClick = onRecordToggle,
+                    enabled = canAct,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    modifier = Modifier.height(30.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isRecording) AccentSignal else SurfaceDark,
+                        contentColor = if (isRecording) Color.Black else AccentSignal,
+                        disabledContainerColor = SurfaceDark,
+                        disabledContentColor = TextSecondary
+                    ),
+                    border = BorderStroke(1.dp, if (isRecording) AccentSignal else AccentDim)
+                ) {
+                    Text(
+                        if (isRecording) "■" else if (track.isEmpty) "● REC" else "● OD",
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
+                CompactIconButton("M", track.muted, canAct, onMuteToggle)
+                Spacer(Modifier.width(3.dp))
+                CompactIconButton("U", false, canAct && !track.isEmpty, onUndo)
+                Spacer(Modifier.width(3.dp))
+                CompactIconButton("E", false, canAct && !track.isEmpty, onEdit)
+                Spacer(Modifier.width(3.dp))
+                CompactIconButton("C", false, canAct && !track.isEmpty, onClear)
+                Spacer(Modifier.width(3.dp))
+                CompactIconButton("X", false, canAct && !track.isEmpty, onExport)
+                Spacer(Modifier.width(8.dp))
+                Slider(
+                    value = volumeSlider,
+                    onValueChange = { volumeSlider = it; onVolumeChange(it) },
+                    valueRange = 0f..1f,
+                    modifier = Modifier.weight(1f),
+                    colors = SliderDefaults.colors(
+                        thumbColor = if (track.isEmpty) TextSecondary else AccentSignal,
+                        activeTrackColor = if (track.isEmpty) TextSecondary else AccentSignal,
+                        inactiveTrackColor = OutlineGrey
+                    )
+                )
+            }
+            if (track.isEmpty && isMasterSet && !isRecording) {
+                Spacer(Modifier.height(2.dp))
+                Row(Modifier.padding(start = 22.dp)) {
+                    MultiplierPicker(selected = selectedMultiplier, onSelect = onMultiplierChange)
+                }
+            }
+        }
+        return
+    }
 
     Column(
         Modifier
@@ -365,13 +572,13 @@ fun TrackRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "TRACK ${track.index + 1}",
+                "${Strings.t("track")} ${track.index + 1}",
                 style = MaterialTheme.typography.titleMedium,
                 color = if (track.isEmpty) TextSecondary else TextPrimary
             )
             Button(
                 onClick = onRecordToggle,
-                enabled = canRecord || isRecording,
+                enabled = canAct,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (isRecording) AccentSignal else SurfaceDark,
                     contentColor = if (isRecording) Color.Black else AccentSignal,
@@ -381,10 +588,19 @@ fun TrackRow(
                 border = BorderStroke(1.dp, if (isRecording) AccentSignal else AccentDim)
             ) {
                 Text(
-                    if (isRecording) "■ STOP" else if (track.isEmpty) "● REC" else "● OVERDUB",
+                    if (isRecording) Strings.t("stop")
+                    else if (track.isEmpty) Strings.t("rec")
+                    else Strings.t("overdub"),
                     style = MaterialTheme.typography.labelLarge
                 )
             }
+        }
+
+        if (track.isEmpty && isMasterSet && !isRecording) {
+            Spacer(Modifier.height(8.dp))
+            Text(Strings.t("new_track_length"), style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+            Spacer(Modifier.height(4.dp))
+            MultiplierPicker(selected = selectedMultiplier, onSelect = onMultiplierChange)
         }
 
         Spacer(Modifier.height(8.dp))
@@ -392,14 +608,17 @@ fun TrackRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             MuteToggle(active = track.muted, onClick = onMuteToggle)
             Spacer(Modifier.width(6.dp))
-            TextButton(onClick = onUndo, enabled = !track.isEmpty) {
-                Text("UNDO", style = MaterialTheme.typography.bodySmall, color = if (!track.isEmpty) TextPrimary else TextSecondary)
+            TextButton(onClick = onUndo, enabled = !track.isEmpty && canAct) {
+                Text(Strings.t("undo"), style = MaterialTheme.typography.bodySmall, color = if (!track.isEmpty) TextPrimary else TextSecondary)
             }
-            TextButton(onClick = onClear, enabled = !track.isEmpty) {
-                Text("CLEAR", style = MaterialTheme.typography.bodySmall, color = if (!track.isEmpty) TextPrimary else TextSecondary)
+            TextButton(onClick = onEdit, enabled = !track.isEmpty && canAct) {
+                Text(Strings.t("edit"), style = MaterialTheme.typography.bodySmall, color = if (!track.isEmpty) TextPrimary else TextSecondary)
             }
-            TextButton(onClick = onExport, enabled = !track.isEmpty) {
-                Text("EXPORT", style = MaterialTheme.typography.bodySmall, color = if (!track.isEmpty) TextPrimary else TextSecondary)
+            TextButton(onClick = onClear, enabled = !track.isEmpty && canAct) {
+                Text(Strings.t("clear"), style = MaterialTheme.typography.bodySmall, color = if (!track.isEmpty) TextPrimary else TextSecondary)
+            }
+            TextButton(onClick = onExport, enabled = !track.isEmpty && canAct) {
+                Text(Strings.t("export"), style = MaterialTheme.typography.bodySmall, color = if (!track.isEmpty) TextPrimary else TextSecondary)
             }
         }
 
