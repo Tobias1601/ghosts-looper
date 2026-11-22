@@ -8,7 +8,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.diy.loopstation"
+        applicationId = "com.diy.loopstation.v2"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
