@@ -6,7 +6,7 @@
 
     <application
         android:allowBackup="true"
-        android:label="GHOSTS Looper"
+        android:label="GHOSTS Looper 2"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:supportsRtl="true">
 
