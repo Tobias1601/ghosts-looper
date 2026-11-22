@@ -49,7 +49,8 @@ class MainActivity : ComponentActivity() {
         AudioSettings.calibrated = prefs.getBoolean("calibrated", false)
         UiSettings.accentHue = prefs.getFloat("accentHue", 14f)
         UiSettings.lang = if (prefs.getString("lang", "EN") == "DE") Lang.DE else Lang.EN
-        UiSettings.randomHue = prefs.getBoolean("randomHue", false)
+        UiSettings.randomHue = prefs.getBoolean("randomHue", true)
+        UiSettings.compact = prefs.getBoolean("compact", true)
         if (UiSettings.randomHue) UiSettings.accentHue = (Math.random() * 360.0).toFloat()
 
         hasPermission = ContextCompat.checkSelfPermission(
@@ -98,6 +99,7 @@ class MainActivity : ComponentActivity() {
             .putFloat("accentHue", UiSettings.accentHue)
             .putString("lang", UiSettings.lang.name)
             .putBoolean("randomHue", UiSettings.randomHue)
+            .putBoolean("compact", UiSettings.compact)
             .apply()
     }
 
@@ -128,7 +130,7 @@ fun LooperScreen(
     var meter by remember { mutableStateOf(0f) }
     var trimTrack by remember { mutableStateOf<Track?>(null) }
     var editTrack by remember { mutableStateOf<Track?>(null) }
-    var compactMode by remember { mutableStateOf(false) }
+    var compactMode by remember { mutableStateOf(UiSettings.compact) }
     val multipliers = remember { mutableStateMapOf<Int, Float>() }
 
     // Auto-latency-test state, hoisted here so it survives closing/reopening SETUP -
@@ -189,7 +191,7 @@ fun LooperScreen(
 
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            LangButton(Strings.t("compact"), compactMode) { compactMode = !compactMode }
+            LangButton(Strings.t("compact"), compactMode) { compactMode = !compactMode; UiSettings.compact = compactMode }
         }
 
         Spacer(Modifier.height(14.dp))

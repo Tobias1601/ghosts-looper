@@ -11,7 +11,8 @@ enum class Lang { DE, EN }
 object UiSettings {
     var accentHue by mutableStateOf(14f) // 0..360, default = signal red-orange
     var lang by mutableStateOf(Lang.EN)
-    var randomHue by mutableStateOf(false)
+    var randomHue by mutableStateOf(true)
+    var compact by mutableStateOf(true)
 }
 
 private val DE = mapOf(

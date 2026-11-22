@@ -14,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -164,6 +165,9 @@ fun ZoomableWaveform(
     val draggables = markers.filter { it.draggable }
     val transients = remember(buffer) { if (draggables.isNotEmpty()) findTransients(buffer) else IntArray(0) }
     val selected = draggables.firstOrNull { it.id == selectedId } ?: draggables.firstOrNull()
+    val latestOnDrag by rememberUpdatedState(onDrag)
+    val latestFracs = remember { mutableMapOf<String, Float>() }
+    draggables.forEach { latestFracs[it.id] = it.frac }
 
     fun setView(newZoom: Float, newStart: Float) {
         val z = newZoom.coerceIn(1f, maxZoom)
@@ -308,14 +312,18 @@ fun ZoomableWaveform(
                             IntOffset(xPx - (handleWidthPx / 2f).roundToInt(), 0)
                         }
                         .pointerInput(m.id, buffer) {
-                            var localFrac = m.frac
+                            // NOTE: this block only restarts when its keys change, so it must
+                            // never read `m` / `onDrag` directly - they'd be stale captures
+                            // (the old marker position -> handle "jumps back"). Always go
+                            // through the up-to-date state holders below.
+                            var localFrac = 0f
                             detectDragGestures(
-                                onDragStart = { localFrac = m.frac; selectedId = m.id },
+                                onDragStart = { localFrac = latestFracs[m.id] ?: 0f; selectedId = m.id },
                                 onDrag = { change, dragAmount ->
                                     change.consume()
                                     val span = (1f / zoom).coerceIn(minSpan, 1f)
                                     localFrac = (localFrac + (dragAmount.x / canvasWidthPx) * span).coerceIn(0f, 1f)
-                                    onDrag(m.id, localFrac)
+                                    latestOnDrag(m.id, localFrac)
                                 }
                             )
                         },
