@@ -4,22 +4,12 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.input.pointer.pointerInput
@@ -36,6 +27,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -45,26 +38,61 @@ data class WaveMarker(
     val frac: Float,
     val color: Color,
     val draggable: Boolean = false,
-    val dashed: Boolean = false
+    val dashed: Boolean = false,
+    val label: String = ""
 )
 
-/** Precomputed (hi, lo) amplitude fraction pair per visible pixel column. */
+/** Finds the sample positions of note/hit attacks (onsets). Used to draw transient
+ *  ticks and to let a marker jump from attack to attack. */
+fun findTransients(buf: ShortArray): IntArray {
+    val hop = SAMPLE_RATE / 500 // 2 ms
+    val n = buf.size / hop
+    if (n < 8) return IntArray(0)
+    val env = FloatArray(n)
+    for (i in 0 until n) {
+        var m = 0
+        val s = i * hop
+        for (j in s until s + hop) { val a = abs(buf[j].toInt()); if (a > m) m = a }
+        env[i] = m.toFloat()
+    }
+    val out = ArrayList<Int>()
+    var last = -100
+    for (i in 3 until n) {
+        val from = max(0, i - 12)
+        var sum = 0f
+        for (k in from until i - 1) sum += env[k]
+        val avg = sum / max(1, i - 1 - from)
+        if (env[i] > avg * 3f + 600f && i - last > 25) {
+            val thr = max(avg * 2f, env[i] * 0.2f)
+            var pos = i * hop
+            val lo = max(0, (i - 2) * hop)
+            val hi = min(buf.size, (i + 1) * hop)
+            for (p in lo until hi) { if (abs(buf[p].toInt()) > thr) { pos = p; break } }
+            // slide back to the nearest zero crossing so a cut here does not click
+            var z = pos
+            val zl = max(1, pos - 96)
+            while (z > zl && (buf[z].toInt() xor buf[z - 1].toInt()) >= 0) z--
+            out.add(z)
+            last = i
+        }
+    }
+    return out.toIntArray()
+}
+
+/** (hi, lo) per pixel column, only for zoom levels where >= 1.5 samples fall on a pixel. */
 private fun computeBars(buffer: ShortArray, viewStart: Float, viewEnd: Float, widthPx: Float): List<Pair<Float, Float>> {
     val n = buffer.size
     if (n == 0 || widthPx < 1f) return emptyList()
-    val startFrame = (viewStart * n).toInt()
-    val endFrame = (viewEnd * n).toInt().coerceAtLeast(startFrame + 1).coerceAtMost(n)
-    val span = (endFrame - startFrame).coerceAtLeast(1)
+    val startF = viewStart * n
+    val spanF = ((viewEnd - viewStart) * n).coerceAtLeast(1f)
     val pixels = widthPx.toInt().coerceAtLeast(1)
-    val samplesPerPixel = (span / pixels).coerceAtLeast(1)
+    val spp = spanF / pixels
+    if (spp < 1.5f) return emptyList()
     val out = ArrayList<Pair<Float, Float>>(pixels)
     for (x in 0 until pixels) {
-        val s = startFrame + x * samplesPerPixel
-        val e = min(n, min(endFrame, s + samplesPerPixel))
-        if (s >= e) {
-            out.add(0f to 0f)
-            continue
-        }
+        val s = (startF + x * spp).toInt().coerceIn(0, n)
+        val e = (startF + (x + 1) * spp).toInt().coerceIn(s + 1, n.coerceAtLeast(s + 1)).coerceAtMost(n)
+        if (s >= e) { out.add(0f to 0f); continue }
         var lo = 0
         var hi = 0
         for (i in s until e) {
@@ -77,15 +105,32 @@ private fun computeBars(buffer: ShortArray, viewStart: Float, viewEnd: Float, wi
     return out
 }
 
+@Composable
+private fun WaveBtn(label: String, enabled: Boolean = true, active: Boolean = false, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .background(if (active) AccentSignal else Color.Transparent)
+            .border(BorderStroke(1.dp, if (active) AccentSignal else OutlineGrey))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 11.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (!enabled) OutlineGrey else if (active) Color.Black else TextPrimary
+        )
+    }
+}
+
 /**
- * Waveform view with real two-finger pinch-to-zoom + pan (via Compose's own
- * detectTransformGestures - the same primitive photo viewers use) and dedicated,
- * appropriately-sized grab handles for each draggable marker, layered on top of the
- * canvas. A touch that starts on a handle always drags exactly that handle (delta-based,
- * so it never jumps); a touch anywhere else pans/zooms the view. The expensive per-pixel
- * waveform scan is cached and only recomputed when the buffer or the visible window
- * changes - moving a handle never triggers a rescan, so dragging stays smooth even on
- * long recordings.
+ * Sampler-style waveform:
+ *  - pinch to zoom (anchored under your fingers) up to individual samples, one finger pans
+ *  - at sample level the real waveform line + dots are drawn, so you see exactly where a
+ *    transient starts; detected attacks are shown as small ticks at the bottom
+ *  - big drag handles for the markers, a minimap that shows where you are zoomed in
+ *  - for precise work: select a marker (IN/OUT), nudge it sample-wise, or jump it from
+ *    transient to transient; +/- zoom around the selected marker
  */
 @Composable
 fun ZoomableWaveform(
@@ -93,23 +138,58 @@ fun ZoomableWaveform(
     markers: List<WaveMarker>,
     onDrag: (id: String, newFrac: Float) -> Unit,
     modifier: Modifier = Modifier,
-    height: Dp = 130.dp
+    height: Dp = 150.dp,
+    onNudge: ((id: String, newFrac: Float) -> Unit)? = null
 ) {
+    val n = buffer.size.coerceAtLeast(1)
+    val minSpan = (64f / n).coerceIn(0.00001f, 1f)
+    val maxZoom = 1f / minSpan
+
     var zoom by remember(buffer) { mutableStateOf(1f) }
     var viewCenter by remember(buffer) { mutableStateOf(0.5f) }
+    var selectedId by remember(buffer) { mutableStateOf<String?>(null) }
     var canvasWidthPx by remember { mutableStateOf(1f) }
+    var miniWidthPx by remember { mutableStateOf(1f) }
     val density = LocalDensity.current
-    val handleWidth = 28.dp
+    val handleWidth = 32.dp
     val handleWidthPx = with(density) { handleWidth.toPx() }
 
-    val visibleSpan = (1f / zoom).coerceIn(0.001f, 1f)
+    val visibleSpan = (1f / zoom).coerceIn(minSpan, 1f)
     val viewStart = (viewCenter - visibleSpan / 2f).coerceIn(0f, (1f - visibleSpan).coerceAtLeast(0f))
     val viewEnd = (viewStart + visibleSpan).coerceAtMost(1f)
 
-    // Cache key deliberately excludes `markers` - dragging a handle must never
-    // trigger a full waveform rescan.
     val bars = remember(buffer, viewStart, viewEnd, canvasWidthPx) {
         computeBars(buffer, viewStart, viewEnd, canvasWidthPx)
+    }
+    val draggables = markers.filter { it.draggable }
+    val transients = remember(buffer) { if (draggables.isNotEmpty()) findTransients(buffer) else IntArray(0) }
+    val selected = draggables.firstOrNull { it.id == selectedId } ?: draggables.firstOrNull()
+
+    fun setView(newZoom: Float, newStart: Float) {
+        val z = newZoom.coerceIn(1f, maxZoom)
+        val sp = (1f / z).coerceIn(minSpan, 1f)
+        zoom = z
+        viewCenter = (newStart + sp / 2f).coerceIn(sp / 2f, (1f - sp / 2f).coerceAtLeast(sp / 2f))
+    }
+
+    fun zoomBy(factor: Float) {
+        val anchor = selected?.frac ?: (viewStart + visibleSpan / 2f)
+        val inView = anchor in viewStart..viewEnd
+        val a = if (inView) anchor else viewStart + visibleSpan / 2f
+        val cx = if (inView) (a - viewStart) / visibleSpan else 0.5f
+        val newZoom = (zoom * factor).coerceIn(1f, maxZoom)
+        val newSpan = (1f / newZoom).coerceIn(minSpan, 1f)
+        // zooming in on an off-screen selected marker jumps to it
+        val target = if (!inView && factor > 1f && selected != null) selected.frac else a
+        setView(newZoom, target - (if (!inView && factor > 1f && selected != null) 0.5f else cx) * newSpan)
+    }
+
+    fun moveSelected(newFrac: Float, fine: Boolean) {
+        val s = selected ?: return
+        val f = newFrac.coerceIn(0f, 1f)
+        if (fine && onNudge != null) onNudge(s.id, f) else onDrag(s.id, f)
+        // keep the marker on screen
+        if (f < viewStart || f > viewEnd) setView(zoom, f - visibleSpan / 2f)
     }
 
     Column(modifier) {
@@ -125,14 +205,15 @@ fun ZoomableWaveform(
                 Modifier
                     .fillMaxSize()
                     .pointerInput(buffer) {
-                        detectTransformGestures { _, pan, zoomChange, _ ->
-                            val span = (1f / zoom).coerceIn(0.001f, 1f)
-                            val newZoom = (zoom * zoomChange).coerceIn(1f, 40f)
-                            val newSpan = (1f / newZoom).coerceIn(0.001f, 1f)
-                            val panFrac = -(pan.x / canvasWidthPx) * span
-                            zoom = newZoom
-                            viewCenter = (viewCenter + panFrac)
-                                .coerceIn(newSpan / 2f, (1f - newSpan / 2f).coerceAtLeast(newSpan / 2f))
+                        detectTransformGestures { centroid, pan, zoomChange, _ ->
+                            val oldSpan = (1f / zoom).coerceIn(minSpan, 1f)
+                            val oldStart = (viewCenter - oldSpan / 2f).coerceIn(0f, (1f - oldSpan).coerceAtLeast(0f))
+                            val cx = (centroid.x / canvasWidthPx).coerceIn(0f, 1f)
+                            val under = oldStart + cx * oldSpan
+                            val newZoom = (zoom * zoomChange).coerceIn(1f, maxZoom)
+                            val newSpan = (1f / newZoom).coerceIn(minSpan, 1f)
+                            val newStart = under - cx * newSpan - (pan.x / canvasWidthPx) * newSpan
+                            setView(newZoom, newStart)
                         }
                     }
             ) {
@@ -140,17 +221,47 @@ fun ZoomableWaveform(
                 val w = size.width
                 val h = size.height
                 val mid = h / 2f
+                drawLine(OutlineGrey, Offset(0f, mid), Offset(w, mid), strokeWidth = 1f)
 
-                bars.forEachIndexed { x, pair ->
-                    val (hiN, loN) = pair
-                    val yTop = mid - hiN * mid
-                    val yBot = mid - loN * mid
-                    drawLine(
-                        color = TextSecondary,
-                        start = Offset(x.toFloat(), yTop),
-                        end = Offset(x.toFloat(), yBot),
-                        strokeWidth = 1.5f
-                    )
+                val startF = viewStart * n
+                val spanF = (viewEnd - viewStart) * n
+                val spp = spanF / w
+                if (bars.isNotEmpty()) {
+                    bars.forEachIndexed { x, pair ->
+                        val (hiN, loN) = pair
+                        drawLine(
+                            color = TextSecondary,
+                            start = Offset(x.toFloat(), mid - hiN * mid),
+                            end = Offset(x.toFloat(), mid - loN * mid),
+                            strokeWidth = 1.5f
+                        )
+                    }
+                } else {
+                    // sample level: draw the actual waveform as a line, dots on each sample
+                    val i0 = startF.toInt().coerceIn(0, buffer.size - 1)
+                    val i1 = (startF + spanF).toInt().coerceIn(i0, buffer.size - 1)
+                    var prev: Offset? = null
+                    for (i in max(0, i0 - 1)..min(buffer.size - 1, i1 + 1)) {
+                        val x = (i - startF) / spp
+                        val y = mid - (buffer[i] / 32768f) * mid
+                        val p = Offset(x, y)
+                        prev?.let { drawLine(TextSecondary, it, p, strokeWidth = 2f) }
+                        if (spp < 0.35f) drawCircle(TextPrimary, 3f, p)
+                        prev = p
+                    }
+                }
+
+                // transient ticks along the bottom edge
+                if (transients.isNotEmpty()) {
+                    val lo = (viewStart * n).toInt()
+                    val hi = (viewEnd * n).toInt()
+                    var drawn = 0
+                    for (t in transients) {
+                        if (t < lo || t > hi) continue
+                        if (++drawn > 300) break
+                        val x = (t - startF) / spp
+                        drawLine(AccentDim, Offset(x, h - 12f), Offset(x, h), strokeWidth = 2f)
+                    }
                 }
 
                 markers.forEach { m ->
@@ -158,31 +269,35 @@ fun ZoomableWaveform(
                         val x = (((m.frac - viewStart) / visibleSpan) * w).coerceIn(1.5f, w - 1.5f)
                         if (m.dashed) {
                             drawLine(
-                                color = m.color,
-                                start = Offset(x, 0f),
-                                end = Offset(x, h),
-                                strokeWidth = 2f,
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f))
+                                color = m.color, start = Offset(x, 0f), end = Offset(x, h),
+                                strokeWidth = 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f))
                             )
                         } else {
+                            val isSel = m.draggable && m.id == selected?.id
                             drawLine(
-                                color = m.color,
-                                start = Offset(x, 0f),
-                                end = Offset(x, h),
-                                strokeWidth = if (m.draggable) 5f else 2f
+                                color = m.color, start = Offset(x, 0f), end = Offset(x, h),
+                                strokeWidth = if (m.draggable) (if (isSel) 5f else 3f) else 2f
                             )
                         }
                     }
                 }
             }
 
-            // Dedicated grab handles for draggable markers, layered on top of the
-            // canvas. Always kept alive (never removed from composition just because
-            // the marker's position scrolls outside the visible window) - removing it
-            // mid-drag would cancel the gesture and could make it look like the
-            // handle "snapped back". Positioning it off-screen is enough; the parent
-            // clips it visually.
-            markers.filter { it.draggable }.forEach { m ->
+            // time at the edges of the visible window
+            Text(
+                "%.3fS".format(viewStart * n / SAMPLE_RATE),
+                style = MaterialTheme.typography.bodySmall, color = TextSecondary,
+                modifier = Modifier.align(Alignment.TopStart).padding(start = 36.dp, top = 2.dp)
+            )
+            Text(
+                "%.3fS".format(viewEnd * n / SAMPLE_RATE),
+                style = MaterialTheme.typography.bodySmall, color = TextSecondary,
+                modifier = Modifier.align(Alignment.TopEnd).padding(end = 36.dp, top = 2.dp)
+            )
+
+            // Grab handles. Always kept in composition (never removed when the marker
+            // scrolls out of view) so a drag can never be cancelled mid-gesture.
+            draggables.forEach { m ->
                 val xFrac = (m.frac - viewStart) / visibleSpan
                 Box(
                     Modifier
@@ -195,32 +310,101 @@ fun ZoomableWaveform(
                         .pointerInput(m.id, buffer) {
                             var localFrac = m.frac
                             detectDragGestures(
-                                onDragStart = { localFrac = m.frac },
+                                onDragStart = { localFrac = m.frac; selectedId = m.id },
                                 onDrag = { change, dragAmount ->
                                     change.consume()
-                                    val span = (1f / zoom).coerceIn(0.001f, 1f)
-                                    localFrac = (localFrac + (dragAmount.x / canvasWidthPx) * span)
-                                        .coerceIn(0f, 1f)
+                                    val span = (1f / zoom).coerceIn(minSpan, 1f)
+                                    localFrac = (localFrac + (dragAmount.x / canvasWidthPx) * span).coerceIn(0f, 1f)
                                     onDrag(m.id, localFrac)
                                 }
                             )
-                        }
-                )
-            }
-        }
-
-        Spacer(Modifier.height(4.dp))
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(Strings.t("pinch_hint"), style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-            if (zoom > 1.01f) {
-                TextButton(onClick = { zoom = 1f; viewCenter = 0.5f }) {
-                    Text(Strings.t("reset_zoom"), style = MaterialTheme.typography.bodySmall, color = AccentSignal)
+                        },
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    if (m.label.isNotEmpty()) {
+                        Text(
+                            m.label,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Black,
+                            modifier = Modifier
+                                .background(m.color)
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        )
+                    }
                 }
             }
         }
+
+        // minimap: where in the whole recording are we looking
+        Spacer(Modifier.height(4.dp))
+        Canvas(
+            Modifier
+                .fillMaxWidth()
+                .height(14.dp)
+                .background(SurfaceDark)
+                .border(BorderStroke(1.dp, OutlineGrey))
+                .pointerInput(buffer) {
+                    detectDragGestures { change, drag ->
+                        change.consume()
+                        val sp = (1f / zoom).coerceIn(minSpan, 1f)
+                        setView(zoom, viewCenter - sp / 2f + drag.x / miniWidthPx)
+                    }
+                }
+        ) {
+            miniWidthPx = size.width
+            val x0 = viewStart * size.width
+            val ww = max(4f, (viewEnd - viewStart) * size.width)
+            drawRect(AccentDim, Offset(x0, 0f), Size(ww, size.height))
+            markers.filter { it.draggable }.forEach {
+                val x = it.frac * size.width
+                drawLine(it.color, Offset(x, 0f), Offset(x, size.height), strokeWidth = 3f)
+            }
+        }
+
+        if (draggables.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            val stepFrac = max(1f, visibleSpan * n / canvasWidthPx) / n
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                draggables.forEach { m ->
+                    WaveBtn(m.label.ifEmpty { m.id.uppercase() }, active = m.id == selected?.id) { selectedId = m.id }
+                }
+                Spacer(Modifier.weight(1f))
+                WaveBtn("◀") { selected?.let { moveSelected(it.frac - stepFrac, true) } }
+                WaveBtn("▶") { selected?.let { moveSelected(it.frac + stepFrac, true) } }
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                WaveBtn("|◀ ${Strings.t("transient")}", enabled = transients.isNotEmpty()) {
+                    selected?.let { s ->
+                        val cur = (s.frac * n).toInt()
+                        val prev = transients.lastOrNull { it < cur - 2 }
+                        if (prev != null) moveSelected(prev.toFloat() / n, true)
+                    }
+                }
+                WaveBtn("${Strings.t("transient")} ▶|", enabled = transients.isNotEmpty()) {
+                    selected?.let { s ->
+                        val cur = (s.frac * n).toInt()
+                        val next = transients.firstOrNull { it > cur + 2 }
+                        if (next != null) moveSelected(next.toFloat() / n, true)
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            WaveBtn("−") { zoomBy(0.5f) }
+            WaveBtn("+") { zoomBy(2f) }
+            WaveBtn("FIT", enabled = zoom > 1.01f) { setView(1f, 0f) }
+            Spacer(Modifier.weight(1f))
+            Text(
+                buildString {
+                    append("%.0f×".format(zoom))
+                    selected?.let { append("  ${it.label.ifEmpty { it.id.uppercase() }} %.3fS".format(it.frac * n / SAMPLE_RATE)) }
+                },
+                style = MaterialTheme.typography.bodySmall, color = TextSecondary
+            )
+        }
+        Text(Strings.t("pinch_hint"), style = MaterialTheme.typography.bodySmall, color = TextSecondary)
     }
 }

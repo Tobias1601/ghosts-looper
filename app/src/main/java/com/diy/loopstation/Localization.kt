@@ -10,7 +10,8 @@ enum class Lang { DE, EN }
  *  draw block makes that spot recompose/redraw automatically when they change. */
 object UiSettings {
     var accentHue by mutableStateOf(14f) // 0..360, default = signal red-orange
-    var lang by mutableStateOf(Lang.DE)
+    var lang by mutableStateOf(Lang.EN)
+    var randomHue by mutableStateOf(false)
 }
 
 private val DE = mapOf(
@@ -22,11 +23,12 @@ private val DE = mapOf(
     "appearance" to "OPTIK",
     "accent_color" to "AKZENTFARBE",
     "language" to "SPRACHE",
+    "random_color" to "ZUFÄLLIGE FARBE BEI JEDEM START",
     "latency_calibration" to "LATENZ-KALIBRIERUNG",
     "offset" to "OFFSET",
     "offset_hint" to "POSITIV = AUFNAHME WIRD FRÜHER GESCHNITTEN (SYSTEM-DELAY AUSGLEICHEN)",
     "low_latency_mode" to "LOW-LATENCY-MODUS",
-    "low_latency_desc" to "VOICE_COMM INPUT + FAST-TRACK OUTPUT",
+    "low_latency_desc" to "SCHNELLER AUDIO-PFAD (WENN VOM GERÄT UNTERSTÜTZT)",
     "auto_latency_test" to "AUTO-LATENZ-TEST (CLICK-TRACK)",
     "metronome" to "METRONOM",
     "loop_length" to "LOOP-LÄNGE",
@@ -61,6 +63,17 @@ private val DE = mapOf(
     "latency_measured" to "GEMESSENE LATENZ",
     "latency_legend" to "GESTRICHELT = ERWARTET · GRÜN = ERKANNTES ECHO",
     "pinch_hint" to "MIT 2 FINGERN ZOOMEN · 1 FINGER ZUM VERSCHIEBEN",
+    "transient" to "TRANSIENT",
+    "input_gain" to "EINGANGSPEGEL",
+    "gain_auto" to "AUTO",
+    "gain_manual" to "MANUELL",
+    "gain_auto_desc" to "NACH JEDER AUFNAHME WIRD DER PEGEL AUTOMATISCH AUF OPTIMALE LAUTSTÄRKE GEBRACHT",
+    "gain_manual_desc" to "FESTER WERT - PEGEL BEIM SPIELEN BEOBACHTEN, NICHT AN DEN RECHTEN RAND",
+    "latency_clap_test" to "KLATSCH-TEST (KOPFHÖRER)",
+    "latency_clap_intro" to "4 VORZÄHLER, DANN 8× MIT DEM CLICK KLATSCHEN (ODER AUF DEN TISCH SCHNIPSEN). KOPFHÖRER EMPFOHLEN. KLATSCHEN LIEGEN MENSCHLICH LEICHT VOR DEM CLICK - FEINJUSTAGE MIT DEM SLIDER.",
+    "latency_clap_recording": "... VORZÄHLER, DANN MIT DEM CLICK KLATSCHEN ...",
+    "latency_first_hint": "LATENZ NOCH NICHT GEMESSEN - EINMAL KALIBRIEREN, DAMIT LOOPS TIGHT SIND",
+    "measure_now": "JETZT MESSEN",
     "reset_zoom" to "ZOOM RESET",
     "sync" to "SYNC",
     "redo_test" to "TEST WIEDERHOLEN",
@@ -79,11 +92,12 @@ private val EN = mapOf(
     "appearance" to "APPEARANCE",
     "accent_color" to "ACCENT COLOR",
     "language" to "LANGUAGE",
+    "random_color" to "RANDOM COLOR ON EVERY LAUNCH",
     "latency_calibration" to "LATENCY CALIBRATION",
     "offset" to "OFFSET",
     "offset_hint" to "POSITIVE = RECORDING GETS CUT EARLIER (COMPENSATE SYSTEM DELAY)",
     "low_latency_mode" to "LOW-LATENCY MODE",
-    "low_latency_desc" to "VOICE_COMM INPUT + FAST-TRACK OUTPUT",
+    "low_latency_desc" to "FAST AUDIO PATH (IF SUPPORTED BY THE DEVICE)",
     "auto_latency_test" to "AUTO LATENCY TEST (CLICK TRACK)",
     "metronome" to "METRONOME",
     "loop_length" to "LOOP LENGTH",
@@ -118,6 +132,17 @@ private val EN = mapOf(
     "latency_measured" to "MEASURED LATENCY",
     "latency_legend" to "DASHED = EXPECTED · GREEN = DETECTED ECHO",
     "pinch_hint" to "PINCH TO ZOOM · DRAG WITH 1 FINGER TO PAN",
+    "transient" to "TRANSIENT",
+    "input_gain" to "INPUT LEVEL",
+    "gain_auto" to "AUTO",
+    "gain_manual" to "MANUAL",
+    "gain_auto_desc" to "AFTER EACH RECORDING THE LEVEL IS AUTOMATICALLY BROUGHT TO AN OPTIMAL VOLUME",
+    "gain_manual_desc" to "FIXED VALUE - WATCH THE METER WHILE PLAYING, KEEP IT AWAY FROM THE RIGHT EDGE",
+    "latency_clap_test" to "CLAP TEST (HEADPHONES)",
+    "latency_clap_intro" to "4 COUNT-IN CLICKS, THEN CLAP ALONG 8 TIMES (OR SNAP ON A TABLE). HEADPHONES RECOMMENDED. HUMANS CLAP SLIGHTLY AHEAD OF THE CLICK - FINE-TUNE WITH THE SLIDER.",
+    "latency_clap_recording": "... COUNT-IN, THEN CLAP WITH THE CLICK ...",
+    "latency_first_hint": "LATENCY NOT MEASURED YET - CALIBRATE ONCE SO LOOPS STAY TIGHT",
+    "measure_now": "MEASURE NOW",
     "reset_zoom" to "RESET ZOOM",
     "sync" to "SYNC",
     "redo_test" to "REDO TEST",

@@ -10,6 +10,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -40,6 +44,7 @@ fun LatencyCalibrator(
     onApply: (Int) -> Unit,
     onCancel: () -> Unit
 ) {
+    var clapMode by remember { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -56,36 +61,45 @@ fun LatencyCalibrator(
 
         when (phase) {
             CalibPhase.IDLE -> {
-                Text(
-                    Strings.t("latency_test_intro"),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
-                )
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(
-                        onClick = onCancel,
-                        border = BorderStroke(1.dp, OutlineGrey)
-                    ) { Text(Strings.t("latency_test_cancel"), style = MaterialTheme.typography.labelLarge) }
-                    Button(
-                        onClick = {
-                            onPhaseChange(CalibPhase.RECORDING)
-                            engine.runAutoLatencyTest { ms, buf, expected, detected ->
-                                onMeasuredMsChange(ms)
-                                onBufferChange(buf)
-                                onExpectedFramesChange(expected)
-                                onDetectedFramesChange(detected)
-                                onPhaseChange(CalibPhase.REVIEW)
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentSignal, contentColor = Color.Black)
-                    ) { Text(Strings.t("latency_test_start"), style = MaterialTheme.typography.labelLarge) }
+                fun start(clap: Boolean) {
+                    clapMode = clap
+                    onPhaseChange(CalibPhase.RECORDING)
+                    val cb = { ms: Int, buf: ShortArray, expected: List<Int>, detected: List<Int> ->
+                        onMeasuredMsChange(ms)
+                        onBufferChange(buf)
+                        onExpectedFramesChange(expected)
+                        onDetectedFramesChange(detected)
+                        onPhaseChange(CalibPhase.REVIEW)
+                    }
+                    if (clap) engine.runClapLatencyTest(cb) else engine.runAutoLatencyTest(onResult = cb)
                 }
+                Text(Strings.t("latency_test_intro"), style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                Spacer(Modifier.height(6.dp))
+                Button(
+                    onClick = { start(false) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentSignal, contentColor = Color.Black)
+                ) { Text(Strings.t("auto_latency_test"), style = MaterialTheme.typography.labelLarge) }
+                Spacer(Modifier.height(14.dp))
+                Text(Strings.t("latency_clap_intro"), style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                Spacer(Modifier.height(6.dp))
+                OutlinedButton(
+                    onClick = { start(true) },
+                    modifier = Modifier.fillMaxWidth(),
+                    border = BorderStroke(1.dp, AccentSignal),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentSignal)
+                ) { Text(Strings.t("latency_clap_test"), style = MaterialTheme.typography.labelLarge) }
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onCancel,
+                    modifier = Modifier.fillMaxWidth(),
+                    border = BorderStroke(1.dp, OutlineGrey)
+                ) { Text(Strings.t("latency_test_cancel"), style = MaterialTheme.typography.labelLarge) }
             }
 
             CalibPhase.RECORDING -> {
                 Text(
-                    Strings.t("latency_test_recording"),
+                    if (clapMode) Strings.t("latency_clap_recording") else Strings.t("latency_test_recording"),
                     style = MaterialTheme.typography.bodyMedium,
                     color = AccentSignal
                 )

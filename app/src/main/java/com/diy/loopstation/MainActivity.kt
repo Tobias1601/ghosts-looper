@@ -29,22 +29,28 @@ import java.io.File
 class MainActivity : ComponentActivity() {
 
     private val engine = LooperEngine()
-    private val metronome = Metronome()
     private var hasPermission by mutableStateOf(false)
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { granted -> hasPermission = granted }
+    ) { granted ->
+        hasPermission = granted
+        if (granted) engine.start()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        engine.metronome = metronome
 
         val prefs = getSharedPreferences("ghosts_settings", MODE_PRIVATE)
         AudioSettings.latencyMs = prefs.getInt("latencyMs", 0)
         AudioSettings.lowLatencyMode = prefs.getBoolean("lowLatency", true)
+        AudioSettings.autoGain = prefs.getBoolean("autoGain", true)
+        AudioSettings.inputGainDb = prefs.getFloat("inputGainDb", 0f)
+        AudioSettings.calibrated = prefs.getBoolean("calibrated", false)
         UiSettings.accentHue = prefs.getFloat("accentHue", 14f)
-        UiSettings.lang = if (prefs.getString("lang", "DE") == "EN") Lang.EN else Lang.DE
+        UiSettings.lang = if (prefs.getString("lang", "EN") == "DE") Lang.DE else Lang.EN
+        UiSettings.randomHue = prefs.getBoolean("randomHue", false)
+        if (UiSettings.randomHue) UiSettings.accentHue = (Math.random() * 360.0).toFloat()
 
         hasPermission = ContextCompat.checkSelfPermission(
             this, Manifest.permission.RECORD_AUDIO
@@ -52,6 +58,8 @@ class MainActivity : ComponentActivity() {
 
         if (!hasPermission) {
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else {
+            engine.start()
         }
 
         setContent {
@@ -59,7 +67,6 @@ class MainActivity : ComponentActivity() {
                 Surface(color = BgBlack, modifier = Modifier.fillMaxSize()) {
                     LooperScreen(
                         engine = engine,
-                        metronome = metronome,
                         hasPermission = hasPermission,
                         onRequestPermission = {
                             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -73,17 +80,29 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
+        saveSettings()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        saveSettings()
+    }
+
+    private fun saveSettings() {
         getSharedPreferences("ghosts_settings", MODE_PRIVATE).edit()
             .putInt("latencyMs", AudioSettings.latencyMs)
             .putBoolean("lowLatency", AudioSettings.lowLatencyMode)
+            .putBoolean("autoGain", AudioSettings.autoGain)
+            .putFloat("inputGainDb", AudioSettings.inputGainDb)
+            .putBoolean("calibrated", AudioSettings.calibrated)
             .putFloat("accentHue", UiSettings.accentHue)
             .putString("lang", UiSettings.lang.name)
+            .putBoolean("randomHue", UiSettings.randomHue)
             .apply()
     }
 
     override fun onDestroy() {
-        engine.stopAll()
-        metronome.stop()
+        engine.shutdown()
         super.onDestroy()
     }
 }
@@ -91,20 +110,22 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun LooperScreen(
     engine: LooperEngine,
-    metronome: Metronome,
     hasPermission: Boolean,
     onRequestPermission: () -> Unit,
     exportDir: File
 ) {
     val context = LocalContext.current
-    var recordingTrackIndex by remember { mutableStateOf(-1) }
     var tick by remember { mutableStateOf(0) }
-    var bpm by remember { mutableStateOf(100f) }
+    var bpm by remember { mutableStateOf(engine.bpm.toFloat()) }
     var metronomeOn by remember { mutableStateOf(false) }
     var metronomeExpanded by remember { mutableStateOf(false) }
     var latencyMs by remember { mutableStateOf(AudioSettings.latencyMs.toFloat()) }
     var lowLatency by remember { mutableStateOf(AudioSettings.lowLatencyMode) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var calibrated by remember { mutableStateOf(AudioSettings.calibrated) }
+    var autoGain by remember { mutableStateOf(AudioSettings.autoGain) }
+    var gainDb by remember { mutableStateOf(AudioSettings.inputGainDb) }
+    var meter by remember { mutableStateOf(0f) }
     var trimTrack by remember { mutableStateOf<Track?>(null) }
     var editTrack by remember { mutableStateOf<Track?>(null) }
     var compactMode by remember { mutableStateOf(false) }
@@ -119,16 +140,21 @@ fun LooperScreen(
     var calibDetected by remember { mutableStateOf(listOf<Int>()) }
     var calibMeasuredMs by remember { mutableStateOf(0) }
 
-    val busy = recordingTrackIndex != -1 || trimTrack != null || editTrack != null || calibratorOpen
-    val overlayOpen = trimTrack != null || editTrack != null || calibratorOpen
-
-    // Mirrors the engine's recording phase (set from a background thread) into
-    // Compose state, so the transport bar and the active track's button can be
-    // colored live while a fresh recording / an overdub is actually happening.
     var enginePhase by remember { mutableStateOf(RecordPhase.NONE) }
+    var recordingTrackIndex by remember { mutableStateOf(-1) }
+    val busy = recordingTrackIndex != -1 || trimTrack != null || editTrack != null || calibratorOpen
+
+    // The engine runs on its own audio thread; the UI just mirrors its state.
+    var lastRevision by remember { mutableStateOf(engine.revision) }
     LaunchedEffect(Unit) {
         while (true) {
             enginePhase = engine.recordingPhase
+            meter = engine.inputPeak
+            recordingTrackIndex = engine.activeRecordingTrackIndex
+            if (metronomeOn != engine.metronomeOn) metronomeOn = engine.metronomeOn
+            if (engine.revision != lastRevision) { lastRevision = engine.revision; tick++ }
+            val pt = engine.pendingTrim
+            if (pt >= 0 && trimTrack == null) trimTrack = engine.tracks[pt]
             delay(30)
         }
     }
@@ -180,6 +206,18 @@ fun LooperScreen(
             return@Column
         }
 
+        if (!calibrated && !settingsOpen && !calibratorOpen) {
+            SectionCard(accent = true) {
+                Text(Strings.t("latency_first_hint"), style = MaterialTheme.typography.bodySmall, color = TextPrimary)
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { settingsOpen = true; calibratorOpen = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentSignal, contentColor = Color.Black)
+                ) { Text(Strings.t("measure_now"), style = MaterialTheme.typography.labelLarge) }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+
         // --- Settings panel ---
         if (settingsOpen) {
             SectionCard(accent = true) {
@@ -192,7 +230,7 @@ fun LooperScreen(
                 Text(Strings.t("offset_hint"), style = MaterialTheme.typography.bodySmall, color = TextSecondary)
                 Slider(
                     value = latencyMs,
-                    onValueChange = { latencyMs = it; AudioSettings.latencyMs = it.toInt() },
+                    onValueChange = { latencyMs = it; AudioSettings.latencyMs = it.toInt(); AudioSettings.calibrated = true; calibrated = true },
                     valueRange = -300f..300f,
                     colors = SliderDefaults.colors(thumbColor = AccentSignal, activeTrackColor = AccentSignal)
                 )
@@ -226,15 +264,60 @@ fun LooperScreen(
                 HairlineDivider()
                 Spacer(Modifier.height(14.dp))
 
+                Text(Strings.t("input_gain"), style = MaterialTheme.typography.titleMedium, color = AccentSignal)
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LangButton(Strings.t("gain_auto"), autoGain) { autoGain = true; AudioSettings.autoGain = true }
+                    LangButton(Strings.t("gain_manual"), !autoGain) { autoGain = false; AudioSettings.autoGain = false }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    Strings.t(if (autoGain) "gain_auto_desc" else "gain_manual_desc"),
+                    style = MaterialTheme.typography.bodySmall, color = TextSecondary
+                )
+                if (!autoGain) {
+                    Text(
+                        "${if (gainDb >= 0) "+" else ""}${gainDb.toInt()} DB",
+                        style = MaterialTheme.typography.bodyMedium, color = TextPrimary
+                    )
+                    Slider(
+                        value = gainDb,
+                        onValueChange = { gainDb = it; AudioSettings.inputGainDb = it },
+                        valueRange = -12f..36f,
+                        colors = SliderDefaults.colors(thumbColor = AccentSignal, activeTrackColor = AccentSignal)
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(Modifier.fillMaxWidth().height(8.dp).background(OutlineGrey)) {
+                    val m = (meter * 1.0f).coerceIn(0.001f, 1f)
+                    Box(Modifier.weight(m).fillMaxHeight().background(if (meter > 0.92f) ComplementarySignal else AccentSignal))
+                    if (m < 1f) Spacer(Modifier.weight(1f - m))
+                }
+
+                Spacer(Modifier.height(14.dp))
+                HairlineDivider()
+                Spacer(Modifier.height(14.dp))
+
                 Text(Strings.t("appearance"), style = MaterialTheme.typography.titleMedium, color = AccentSignal)
                 Spacer(Modifier.height(6.dp))
                 Text(Strings.t("accent_color"), style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
                 Slider(
                     value = UiSettings.accentHue,
-                    onValueChange = { UiSettings.accentHue = it },
+                    onValueChange = { UiSettings.accentHue = it; UiSettings.randomHue = false },
                     valueRange = 0f..360f,
                     colors = SliderDefaults.colors(thumbColor = AccentSignal, activeTrackColor = AccentSignal)
                 )
+                Row(
+                    Modifier.fillMaxWidth().clickable { UiSettings.randomHue = !UiSettings.randomHue },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = UiSettings.randomHue,
+                        onCheckedChange = { UiSettings.randomHue = it },
+                        colors = CheckboxDefaults.colors(checkedColor = AccentSignal, checkmarkColor = Color.Black, uncheckedColor = OutlineGrey)
+                    )
+                    Text(Strings.t("random_color"), style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                }
 
                 Spacer(Modifier.height(10.dp))
                 Text(Strings.t("language"), style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
@@ -324,6 +407,8 @@ fun LooperScreen(
                 onApply = { ms ->
                     latencyMs = ms.toFloat()
                     AudioSettings.latencyMs = ms
+                    AudioSettings.calibrated = true
+                    calibrated = true
                     calibratorOpen = false
                 },
                 onCancel = { calibratorOpen = false }
@@ -336,6 +421,7 @@ fun LooperScreen(
             TrimEditor(
                 title = Strings.t("trim_title"),
                 buffer = t.buffer,
+                initialEndFrac = (engine.pendingTrimInitialEnd.toFloat() / t.buffer.size.coerceAtLeast(1)).coerceIn(0f, 1f),
                 snapFracs = t.clickGridFrames.map { it.toFloat() / t.buffer.size.toFloat() },
                 onConfirm = { s, e ->
                     engine.finalizeMasterTrim(t, s, e)
@@ -390,8 +476,8 @@ fun LooperScreen(
                 checked = metronomeOn,
                 onCheckedChange = {
                     metronomeOn = it
-                    metronome.bpm = bpm.toInt()
-                    if (it) metronome.start() else metronome.stop()
+                    engine.bpm = bpm.toInt()
+                    engine.setMetronome(it)
                 },
                 colors = SwitchDefaults.colors(checkedTrackColor = AccentSignal)
             )
@@ -399,7 +485,7 @@ fun LooperScreen(
         if (metronomeExpanded) {
             Slider(
                 value = bpm,
-                onValueChange = { bpm = it; metronome.bpm = it.toInt() },
+                onValueChange = { bpm = it; engine.bpm = it.toInt() },
                 valueRange = 40f..220f,
                 colors = SliderDefaults.colors(thumbColor = AccentSignal, activeTrackColor = AccentSignal)
             )
@@ -415,7 +501,7 @@ fun LooperScreen(
             color = TextSecondary
         )
         Spacer(Modifier.height(4.dp))
-        SyncBar(engine = engine, tick = tick, paused = overlayOpen, phase = enginePhase)
+        SyncBar(engine = engine, phase = enginePhase)
 
         Spacer(Modifier.height(if (compactMode) 4.dp else 10.dp))
 
@@ -424,30 +510,14 @@ fun LooperScreen(
                 TrackRow(
                     track = track,
                     isRecording = recordingTrackIndex == track.index,
-                    canAct = !busy || recordingTrackIndex == track.index,
+                    canAct = (!busy || recordingTrackIndex == track.index) && (recordingTrackIndex == -1 || recordingTrackIndex == track.index),
                     isMasterSet = engine.isMasterSet(),
                     selectedMultiplier = multipliers[track.index] ?: 1f,
                     onMultiplierChange = { multipliers[track.index] = it },
                     compact = compactMode,
                     onRecordToggle = {
-                        if (recordingTrackIndex == track.index) {
-                            engine.stopRecording()
-                        } else if (!busy) {
-                            recordingTrackIndex = track.index
-                            val mult = multipliers[track.index] ?: 1f
-                            engine.startRecording(track, mult) { raw ->
-                                recordingTrackIndex = -1
-                                if (raw != null) {
-                                    trimTrack = track
-                                    // The metronome was just a recording aid - stop it
-                                    // now so it doesn't keep clicking while trimming.
-                                    if (metronomeOn) {
-                                        metronomeOn = false
-                                        metronome.stop()
-                                    }
-                                }
-                                tick++
-                            }
+                        if (!busy || recordingTrackIndex == track.index || enginePhase != RecordPhase.NONE) {
+                            engine.pressRecord(track, multipliers[track.index] ?: 1f)
                         }
                     },
                     onClear = { engine.clear(track); tick++ },
@@ -459,6 +529,7 @@ fun LooperScreen(
                         recordingTrackIndex != track.index -> null
                         enginePhase == RecordPhase.OVERDUBBING -> OverdubSignal
                         enginePhase == RecordPhase.RECORDING_FRESH -> ComplementarySignal
+                        enginePhase == RecordPhase.WAITING -> AccentDim
                         else -> null
                     }
                 )
@@ -493,23 +564,17 @@ fun LooperScreen(
 }
 
 @Composable
-fun SyncBar(engine: LooperEngine, tick: Int, paused: Boolean = false, phase: RecordPhase = RecordPhase.NONE) {
+fun SyncBar(engine: LooperEngine, phase: RecordPhase = RecordPhase.NONE) {
     var progress by remember { mutableStateOf(0f) }
-    val masterSet = engine.isMasterSet()
+    var playing by remember { mutableStateOf(false) }
 
-    LaunchedEffect(masterSet, tick, paused) {
-        if (!masterSet || paused) return@LaunchedEffect
+    // Reads the engine's single frame counter - the same one that drives the audio.
+    LaunchedEffect(Unit) {
         while (true) {
-            if (!engine.isPlaying) {
-                progress = 0f
-                delay(60)
-                continue
-            }
-            val durNanos = engine.masterLoopLengthFrames.toLong() * 1_000_000_000L / SAMPLE_RATE
-            if (durNanos <= 0L) break
-            val elapsed = (System.nanoTime() - engine.sessionStartNanos) % durNanos
-            progress = elapsed.toFloat() / durNanos.toFloat()
-            delay(40)
+            val m = engine.masterLoopLengthFrames
+            playing = engine.isPlaying && m > 0
+            progress = if (playing) (engine.globalPos % m).toFloat() / m.toFloat() else 0f
+            delay(25)
         }
     }
 
@@ -519,13 +584,13 @@ fun SyncBar(engine: LooperEngine, tick: Int, paused: Boolean = false, phase: Rec
         else -> AccentSignal
     }
 
-    if (masterSet) {
+    if (engine.isMasterSet()) {
         Row(
             Modifier.fillMaxWidth().height(10.dp),
             horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             repeat(16) { i ->
-                val filled = engine.isPlaying && progress >= i / 16f
+                val filled = playing && progress >= i / 16f
                 Box(
                     Modifier
                         .weight(1f)

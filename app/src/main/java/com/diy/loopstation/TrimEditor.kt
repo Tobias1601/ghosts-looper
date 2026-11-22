@@ -39,6 +39,7 @@ fun TrimEditor(
     onCancel: () -> Unit
 ) {
     val hasGrid = snapFracs.isNotEmpty()
+    val minGap = 64f / buffer.size.coerceAtLeast(1)
     var startFrac by remember(buffer) { mutableStateOf(if (hasGrid) 0f else initialStartFrac) }
     var endFrac by remember(buffer) { mutableStateOf(initialEndFrac) }
 
@@ -67,8 +68,8 @@ fun TrimEditor(
 
         val markers = buildList {
             snapFracs.forEach { add(WaveMarker("grid_$it", it, TextPrimary, dashed = true)) }
-            add(WaveMarker("start", startFrac, AccentSignal, draggable = !hasGrid))
-            add(WaveMarker("end", endFrac, AccentSignal, draggable = true))
+            add(WaveMarker("start", startFrac, AccentSignal, draggable = !hasGrid, label = "IN"))
+            add(WaveMarker("end", endFrac, AccentSignal, draggable = true, label = "OUT"))
         }
 
         ZoomableWaveform(
@@ -76,8 +77,15 @@ fun TrimEditor(
             markers = markers,
             onDrag = { id, frac ->
                 when (id) {
-                    "start" -> if (!hasGrid) startFrac = min(frac, endFrac - 0.004f).coerceAtLeast(0f)
-                    "end" -> endFrac = max(snap(frac), startFrac + 0.004f).coerceAtMost(1f)
+                    "start" -> if (!hasGrid) startFrac = min(frac, endFrac - minGap).coerceAtLeast(0f)
+                    "end" -> endFrac = max(snap(frac), startFrac + minGap).coerceAtMost(1f)
+                }
+            },
+            // fine moves (nudge / transient jump) never get pulled onto the click grid
+            onNudge = { id, frac ->
+                when (id) {
+                    "start" -> if (!hasGrid) startFrac = min(frac, endFrac - minGap).coerceAtLeast(0f)
+                    "end" -> endFrac = max(frac, startFrac + minGap).coerceAtMost(1f)
                 }
             }
         )
