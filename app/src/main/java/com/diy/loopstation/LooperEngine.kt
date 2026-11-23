@@ -286,24 +286,59 @@ class LooperEngine {
         bump()
     }
 
-    /** Re-edit a committed track: same length (sync stays intact), the chosen window of
-     *  the untrimmed capture moves to the loop start, the rest is silence. */
-    fun reEditTrack(track: Track, startFrame: Int, endFrame: Int) {
-        val source = if (track.rawCapture.isNotEmpty()) track.rawCapture else track.buffer
-        val srcLen = source.size
-        if (srcLen == 0) return
-        val s = startFrame.coerceIn(0, srcLen)
-        val e = endFrame.coerceIn(s + 1, srcLen)
+    /** Builds the playable buffer for an edit window: the chosen part of the untrimmed
+     *  capture goes to the loop start. Total length stays the same (sync stays intact).
+     *  [repeat] = the window loops (Simpler loop mode) to fill the track, otherwise
+     *  the rest is silence (one-shot). */
+    private fun buildEdited(source: ShortArray, s0: Int, e0: Int, outLen: Int, repeat: Boolean): ShortArray {
+        val s = s0.coerceIn(0, source.size)
+        val e = e0.coerceIn(s + 1, source.size)
         val segment = source.copyOfRange(s, e)
         fadeEdges(segment)
-        val outLen = track.buffer.size.coerceAtLeast(1)
-        val newBuf = ShortArray(outLen)
-        segment.copyInto(newBuf, 0, 0, min(segment.size, outLen))
+        val out = ShortArray(outLen.coerceAtLeast(1))
+        if (!repeat) {
+            segment.copyInto(out, 0, 0, min(segment.size, out.size))
+        } else {
+            var pos = 0
+            while (pos < out.size) {
+                val n = min(segment.size, out.size - pos)
+                segment.copyInto(out, pos, 0, n)
+                pos += n
+            }
+        }
+        return out
+    }
+
+    private fun editSource(track: Track) = if (track.rawCapture.isNotEmpty()) track.rawCapture else track.buffer
+
+    /** Call once when the edit view opens: remembers the state for undo / cancel. */
+    fun beginEdit(track: Track) {
+        if (track.rawCapture.isEmpty()) track.rawCapture = track.buffer.copyOf()
         track.lastBuffer = track.buffer
         track.lastRawCapture = track.rawCapture
-        track.buffer = newBuf
+    }
+
+    /** Live audition while IN/OUT are being moved - the running loop changes immediately. */
+    fun previewEdit(track: Track, startFrame: Int, endFrame: Int, repeat: Boolean) {
+        val src = editSource(track)
+        if (src.isEmpty()) return
+        track.buffer = buildEdited(src, startFrame, endFrame, track.lastBuffer.size.coerceAtLeast(track.buffer.size), repeat)
+    }
+
+    fun commitEdit(track: Track, startFrame: Int, endFrame: Int, repeat: Boolean) {
+        val src = editSource(track)
+        if (src.isEmpty()) return
+        val s = startFrame.coerceIn(0, src.size)
+        val e = endFrame.coerceIn(s + 1, src.size)
+        track.buffer = buildEdited(src, s, e, track.lastBuffer.size.coerceAtLeast(1), repeat)
         track.activeWindowStart = s
         track.activeWindowEnd = e
+        bump()
+    }
+
+    fun cancelEdit(track: Track) {
+        track.buffer = track.lastBuffer
+        track.rawCapture = track.lastRawCapture
         bump()
     }
 

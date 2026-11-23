@@ -447,7 +447,7 @@ fun LooperScreen(
                 buffer = t.buffer,
                 initialEndFrac = (engine.pendingTrimInitialEnd.toFloat() / t.buffer.size.coerceAtLeast(1)).coerceIn(0f, 1f),
                 snapFracs = t.clickGridFrames.map { it.toFloat() / t.buffer.size.toFloat() },
-                onConfirm = { s, e ->
+                onConfirm = { s, e, _ ->
                     engine.finalizeMasterTrim(t, s, e)
                     trimTrack = null
                     tick++
@@ -465,19 +465,39 @@ fun LooperScreen(
         // always reads from the track's persistent raw capture so widening back
         // out after narrowing never loses audio) ---
         editTrack?.let { t ->
+            // snapshot for undo/cancel + make sure an untrimmed source exists
+            androidx.compose.runtime.LaunchedEffect(t) { engine.beginEdit(t) }
             val editSource = if (t.rawCapture.isNotEmpty()) t.rawCapture else t.buffer
             val srcLen = editSource.size.coerceAtLeast(1)
+            val outLen = t.buffer.size.coerceAtLeast(1)
             TrimEditor(
                 title = "${Strings.t("edit_title")} ${t.index + 1}",
                 buffer = editSource,
                 initialStartFrac = (t.activeWindowStart.toFloat() / srcLen).coerceIn(0f, 1f),
                 initialEndFrac = (t.activeWindowEnd.toFloat() / srcLen).coerceIn(0f, 1f),
-                onConfirm = { s, e ->
-                    engine.reEditTrack(t, s, e)
+                onPreview = { s, e, rep -> engine.previewEdit(t, s, e, rep) },
+                playheadFor = { s, e, rep ->
+                    val len = t.buffer.size
+                    if (len <= 0 || !engine.isPlaying) null
+                    else {
+                        val p = (engine.globalPos % len).toInt()
+                        val seg = (e - s).coerceAtLeast(1)
+                        val local = if (rep) p % seg else kotlin.math.min(p, seg)
+                        ((s + local).toFloat() / srcLen).coerceIn(0f, 1f)
+                    }
+                },
+                isPlaying = { engine.isPlaying },
+                onTogglePlay = { if (engine.isPlaying) engine.stopAll() else engine.playAll() },
+                onConfirm = { s, e, rep ->
+                    engine.commitEdit(t, s, e, rep)
                     editTrack = null
                     tick++
                 },
-                onCancel = { editTrack = null }
+                onCancel = {
+                    engine.cancelEdit(t)
+                    editTrack = null
+                    tick++
+                }
             )
             Spacer(Modifier.height(10.dp))
         }

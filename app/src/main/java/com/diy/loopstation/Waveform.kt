@@ -140,7 +140,8 @@ fun ZoomableWaveform(
     onDrag: (id: String, newFrac: Float) -> Unit,
     modifier: Modifier = Modifier,
     height: Dp = 150.dp,
-    onNudge: ((id: String, newFrac: Float) -> Unit)? = null
+    onNudge: ((id: String, newFrac: Float) -> Unit)? = null,
+    playheadFrac: Float? = null
 ) {
     val n = buffer.size.coerceAtLeast(1)
     val minSpan = (64f / n).coerceIn(0.00001f, 1f)
@@ -268,6 +269,14 @@ fun ZoomableWaveform(
                     }
                 }
 
+                playheadFrac?.let { ph ->
+                    if (ph in viewStart..viewEnd) {
+                        val x = ((ph - viewStart) / visibleSpan) * w
+                        drawLine(Color.White, Offset(x, 0f), Offset(x, h), strokeWidth = 3f)
+                        drawCircle(Color.White, 6f, Offset(x, 6f))
+                    }
+                }
+
                 markers.forEach { m ->
                     if (m.frac in viewStart..viewEnd) {
                         val x = (((m.frac - viewStart) / visibleSpan) * w).coerceIn(1.5f, w - 1.5f)
@@ -366,6 +375,10 @@ fun ZoomableWaveform(
             markers.filter { it.draggable }.forEach {
                 val x = it.frac * size.width
                 drawLine(it.color, Offset(x, 0f), Offset(x, size.height), strokeWidth = 3f)
+            }
+            playheadFrac?.let {
+                val x = it * size.width
+                drawLine(Color.White, Offset(x, 0f), Offset(x, size.height), strokeWidth = 3f)
             }
         }
 

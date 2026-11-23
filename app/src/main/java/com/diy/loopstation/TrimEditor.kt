@@ -10,6 +10,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,13 +39,44 @@ fun TrimEditor(
     initialStartFrac: Float = 0f,
     initialEndFrac: Float = 1f,
     snapFracs: List<Float> = emptyList(),
-    onConfirm: (startFrame: Int, endFrame: Int) -> Unit,
-    onCancel: () -> Unit
+    onConfirm: (startFrame: Int, endFrame: Int, repeat: Boolean) -> Unit,
+    onCancel: () -> Unit,
+    /** Edit mode only (all null = plain trim like the first recording): */
+    onPreview: ((startFrame: Int, endFrame: Int, repeat: Boolean) -> Unit)? = null,
+    playheadFor: ((startFrame: Int, endFrame: Int, repeat: Boolean) -> Float?)? = null,
+    isPlaying: (() -> Boolean)? = null,
+    onTogglePlay: (() -> Unit)? = null
 ) {
     val hasGrid = snapFracs.isNotEmpty()
     val minGap = 64f / buffer.size.coerceAtLeast(1)
     var startFrac by remember(buffer) { mutableStateOf(if (hasGrid) 0f else initialStartFrac) }
     var endFrac by remember(buffer) { mutableStateOf(initialEndFrac) }
+    var repeat by remember(buffer) { mutableStateOf(true) }
+    var playhead by remember { mutableStateOf<Float?>(null) }
+    var playingNow by remember { mutableStateOf(false) }
+    val editMode = onPreview != null
+
+    // live audition: the running loop follows the markers (debounced, off the UI thread)
+    if (onPreview != null) {
+        LaunchedEffect(startFrac, endFrac, repeat) {
+            delay(45)
+            val sf = (startFrac * buffer.size).toInt()
+            val ef = (endFrac * buffer.size).toInt()
+            withContext(Dispatchers.Default) { onPreview(sf, ef, repeat) }
+        }
+    }
+    // playhead + transport state, polled
+    if (playheadFor != null) {
+        LaunchedEffect(buffer) {
+            while (true) {
+                playingNow = isPlaying?.invoke() ?: false
+                playhead = if (playingNow)
+                    playheadFor((startFrac * buffer.size).toInt(), (endFrac * buffer.size).toInt(), repeat)
+                else null
+                delay(30)
+            }
+        }
+    }
 
     fun snap(frac: Float): Float {
         if (!hasGrid) return frac
@@ -87,8 +122,23 @@ fun TrimEditor(
                     "start" -> if (!hasGrid) startFrac = min(frac, endFrac - minGap).coerceAtLeast(0f)
                     "end" -> endFrac = max(frac, startFrac + minGap).coerceAtMost(1f)
                 }
-            }
+            },
+            playheadFrac = playhead
         )
+
+        if (editMode) {
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                LangButton(if (playingNow) "■ ${Strings.t("edit_stop")}" else "▶ ${Strings.t("edit_play")}", playingNow) {
+                    onTogglePlay?.invoke()
+                }
+                Spacer(Modifier.weight(1f))
+                LangButton(Strings.t("edit_repeat"), repeat) { repeat = true }
+                LangButton(Strings.t("edit_once"), !repeat) { repeat = false }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(Strings.t("edit_hint"), style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+        }
 
         Spacer(Modifier.height(12.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -102,7 +152,7 @@ fun TrimEditor(
                 onClick = {
                     val s = (startFrac * buffer.size).toInt()
                     val e = (endFrac * buffer.size).toInt()
-                    onConfirm(s, e)
+                    onConfirm(s, e, repeat)
                 },
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(containerColor = ConfirmGreen, contentColor = Color.Black)
