@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
 import java.io.File
@@ -174,19 +175,40 @@ fun LooperScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                 GhostIcon(modifier = Modifier.width(22.dp).height(32.dp), color = AccentSignal)
                 Spacer(Modifier.width(10.dp))
-                Column {
-                    Text(Strings.t("app_title"), style = MaterialTheme.typography.headlineMedium, color = TextPrimary)
-                    Text(Strings.t("app_subtitle"), style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        Strings.t("app_title"),
+                        style = MaterialTheme.typography.headlineMedium.copy(fontSize = 22.sp),
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                    Text(
+                        Strings.t("app_subtitle"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
                 }
             }
+            Spacer(Modifier.width(8.dp))
             OutlinedButton(
                 onClick = { settingsOpen = !settingsOpen },
                 border = BorderStroke(1.dp, if (settingsOpen) AccentSignal else OutlineGrey),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = if (settingsOpen) AccentSignal else TextSecondary)
-            ) { Text(Strings.t("setup"), style = MaterialTheme.typography.labelLarge) }
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = if (settingsOpen) AccentSignal else TextSecondary),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    Strings.t("setup"),
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
         }
 
         Spacer(Modifier.height(8.dp))
