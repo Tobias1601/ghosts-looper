@@ -181,7 +181,7 @@ fun LooperScreen(
                 Column(Modifier.weight(1f)) {
                     Text(
                         Strings.t("app_title"),
-                        style = MaterialTheme.typography.headlineMedium.copy(fontSize = 22.sp),
+                        style = MaterialTheme.typography.headlineMedium.copy(fontSize = 20.sp),
                         color = TextPrimary,
                         maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
@@ -239,6 +239,32 @@ fun LooperScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = AccentSignal, contentColor = Color.Black)
                 ) { Text(Strings.t("measure_now"), style = MaterialTheme.typography.labelLarge) }
             }
+            Spacer(Modifier.height(10.dp))
+        }
+
+        // --- Auto latency calibrator overlay ---
+        if (calibratorOpen) {
+            LatencyCalibrator(
+                engine = engine,
+                phase = calibPhase,
+                onPhaseChange = { calibPhase = it },
+                buffer = calibBuffer,
+                onBufferChange = { calibBuffer = it },
+                expectedFrames = calibExpected,
+                onExpectedFramesChange = { calibExpected = it },
+                detectedFrames = calibDetected,
+                onDetectedFramesChange = { calibDetected = it },
+                measuredMs = calibMeasuredMs,
+                onMeasuredMsChange = { calibMeasuredMs = it },
+                onApply = { ms ->
+                    latencyMs = ms.toFloat()
+                    AudioSettings.latencyMs = ms
+                    AudioSettings.calibrated = true
+                    calibrated = true
+                    calibratorOpen = false
+                },
+                onCancel = { calibratorOpen = false }
+            )
             Spacer(Modifier.height(10.dp))
         }
 
@@ -403,40 +429,14 @@ fun LooperScreen(
                 Spacer(Modifier.height(18.dp))
                 val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
                 Text(
-                    "by ghostsmakemusic",
+                    "by ghostsmakemusic · instagram",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary,
                     modifier = Modifier.clickable {
-                        uriHandler.openUri("https://linktr.ee/ghostsmakemusic")
+                        uriHandler.openUri("https://www.instagram.com/ghostsmakemusic/")
                     }
                 )
             }
-            Spacer(Modifier.height(10.dp))
-        }
-
-        // --- Auto latency calibrator overlay ---
-        if (calibratorOpen) {
-            LatencyCalibrator(
-                engine = engine,
-                phase = calibPhase,
-                onPhaseChange = { calibPhase = it },
-                buffer = calibBuffer,
-                onBufferChange = { calibBuffer = it },
-                expectedFrames = calibExpected,
-                onExpectedFramesChange = { calibExpected = it },
-                detectedFrames = calibDetected,
-                onDetectedFramesChange = { calibDetected = it },
-                measuredMs = calibMeasuredMs,
-                onMeasuredMsChange = { calibMeasuredMs = it },
-                onApply = { ms ->
-                    latencyMs = ms.toFloat()
-                    AudioSettings.latencyMs = ms
-                    AudioSettings.calibrated = true
-                    calibrated = true
-                    calibratorOpen = false
-                },
-                onCancel = { calibratorOpen = false }
-            )
             Spacer(Modifier.height(10.dp))
         }
 
@@ -475,6 +475,7 @@ fun LooperScreen(
                 buffer = editSource,
                 initialStartFrac = (t.activeWindowStart.toFloat() / srcLen).coerceIn(0f, 1f),
                 initialEndFrac = (t.activeWindowEnd.toFloat() / srcLen).coerceIn(0f, 1f),
+                changesLoopLength = engine.isSoloTrack(t),
                 onPreview = { s, e, rep -> engine.previewEdit(t, s, e, rep) },
                 playheadFor = { s, e, rep ->
                     val len = t.buffer.size
@@ -482,7 +483,7 @@ fun LooperScreen(
                     else {
                         val p = (engine.globalPos % len).toInt()
                         val seg = (e - s).coerceAtLeast(1)
-                        val local = if (rep) p % seg else kotlin.math.min(p, seg)
+                        val local = if (engine.isSoloTrack(t)) p else if (rep) p % seg else kotlin.math.min(p, seg)
                         ((s + local).toFloat() / srcLen).coerceIn(0f, 1f)
                     }
                 },

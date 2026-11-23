@@ -16,8 +16,8 @@ object UiSettings {
 }
 
 private val DE = mapOf(
-    "app_title" to "GHOSTS LOOPER",
-    "app_subtitle" to "04 TRACK",
+    "app_title" to "GHOSTSMAKEMUSIC",
+    "app_subtitle" to "LOOPER · 04 TRACK",
     "setup" to "SETUP",
     "mic_permission_needed" to "MIKROFON-ZUGRIFF ERFORDERLICH",
     "allow" to "ERLAUBEN",
@@ -54,6 +54,7 @@ private val DE = mapOf(
     "edit_repeat" to "WIEDERHOLEN",
     "edit_once" to "EINMAL",
     "edit_hint" to "IN/OUT verschieben: der laufende Loop ändert sich sofort. Weißer Strich = Playhead.",
+    "edit_hint_master" to "IN/OUT legen die neue LOOP-LÄNGE fest. Weißer Strich = Playhead.",
     "edit_title" to "EDIT // TRACK",
     "trim_length" to "LÄNGE",
     "discard" to "VERWERFEN",
@@ -90,8 +91,8 @@ private val DE = mapOf(
 )
 
 private val EN = mapOf(
-    "app_title" to "GHOSTS LOOPER",
-    "app_subtitle" to "04 TRACK",
+    "app_title" to "GHOSTSMAKEMUSIC",
+    "app_subtitle" to "LOOPER · 04 TRACK",
     "setup" to "SETUP",
     "mic_permission_needed" to "MICROPHONE ACCESS REQUIRED",
     "allow" to "ALLOW",
@@ -128,6 +129,7 @@ private val EN = mapOf(
     "edit_repeat" to "REPEAT",
     "edit_once" to "ONCE",
     "edit_hint" to "Move IN/OUT: the running loop changes instantly. White line = playhead.",
+    "edit_hint_master" to "IN/OUT set the new LOOP LENGTH. White line = playhead.",
     "edit_title" to "EDIT // TRACK",
     "trim_length" to "LENGTH",
     "discard" to "DISCARD",

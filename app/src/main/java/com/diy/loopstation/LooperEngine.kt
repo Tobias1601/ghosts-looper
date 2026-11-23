@@ -227,7 +227,11 @@ class LooperEngine {
         track.isEmpty = track.buffer.isEmpty()
         track.activeWindowStart = 0
         track.activeWindowEnd = track.rawCapture.size
-        post { if (tracks.all { it.isEmpty }) resetTransport() }
+        val soloLen = if (isSoloTrack(track)) track.buffer.size else 0
+        post {
+            if (tracks.all { it.isEmpty }) resetTransport()
+            else if (soloLen > 0 && masterLoopLengthFrames != soloLen) { masterLoopLengthFrames = soloLen; globalPos = 0 }
+        }
         bump()
     }
 
@@ -311,6 +315,9 @@ class LooperEngine {
 
     private fun editSource(track: Track) = if (track.rawCapture.isNotEmpty()) track.rawCapture else track.buffer
 
+    /** True when no other track has audio: then the edit may redefine the loop length. */
+    fun isSoloTrack(track: Track) = tracks.all { it === track || it.isEmpty }
+
     /** Call once when the edit view opens: remembers the state for undo / cancel. */
     fun beginEdit(track: Track) {
         if (track.rawCapture.isEmpty()) track.rawCapture = track.buffer.copyOf()
@@ -322,7 +329,10 @@ class LooperEngine {
     fun previewEdit(track: Track, startFrame: Int, endFrame: Int, repeat: Boolean) {
         val src = editSource(track)
         if (src.isEmpty()) return
-        track.buffer = buildEdited(src, startFrame, endFrame, track.lastBuffer.size.coerceAtLeast(track.buffer.size), repeat)
+        val s = startFrame.coerceIn(0, src.size)
+        val e = endFrame.coerceIn(s + 1, src.size)
+        val outLen = if (isSoloTrack(track)) e - s else track.lastBuffer.size.coerceAtLeast(1)
+        track.buffer = buildEdited(src, s, e, outLen, repeat)
     }
 
     fun commitEdit(track: Track, startFrame: Int, endFrame: Int, repeat: Boolean) {
@@ -330,9 +340,19 @@ class LooperEngine {
         if (src.isEmpty()) return
         val s = startFrame.coerceIn(0, src.size)
         val e = endFrame.coerceIn(s + 1, src.size)
-        track.buffer = buildEdited(src, s, e, track.lastBuffer.size.coerceAtLeast(1), repeat)
+        val solo = isSoloTrack(track)
+        val outLen = if (solo) e - s else track.lastBuffer.size.coerceAtLeast(1)
+        track.buffer = buildEdited(src, s, e, outLen, repeat)
         track.activeWindowStart = s
         track.activeWindowEnd = e
+        if (solo) {
+            // the first loop defines the length: the new window IS the new loop
+            post {
+                masterLoopLengthFrames = outLen
+                globalPos = 0
+                bump()
+            }
+        }
         bump()
     }
 

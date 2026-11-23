@@ -41,6 +41,8 @@ fun TrimEditor(
     snapFracs: List<Float> = emptyList(),
     onConfirm: (startFrame: Int, endFrame: Int, repeat: Boolean) -> Unit,
     onCancel: () -> Unit,
+    /** Edit of the only/first track: IN/OUT define the new loop length itself. */
+    changesLoopLength: Boolean = false,
     /** Edit mode only (all null = plain trim like the first recording): */
     onPreview: ((startFrame: Int, endFrame: Int, repeat: Boolean) -> Unit)? = null,
     playheadFor: ((startFrame: Int, endFrame: Int, repeat: Boolean) -> Float?)? = null,
@@ -133,11 +135,13 @@ fun TrimEditor(
                     onTogglePlay?.invoke()
                 }
                 Spacer(Modifier.weight(1f))
-                LangButton(Strings.t("edit_repeat"), repeat) { repeat = true }
-                LangButton(Strings.t("edit_once"), !repeat) { repeat = false }
+                if (!changesLoopLength) {
+                    LangButton(Strings.t("edit_repeat"), repeat) { repeat = true }
+                    LangButton(Strings.t("edit_once"), !repeat) { repeat = false }
+                }
             }
             Spacer(Modifier.height(4.dp))
-            Text(Strings.t("edit_hint"), style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+            Text(Strings.t(if (changesLoopLength) "edit_hint_master" else "edit_hint"), style = MaterialTheme.typography.bodySmall, color = TextSecondary)
         }
 
         Spacer(Modifier.height(12.dp))
